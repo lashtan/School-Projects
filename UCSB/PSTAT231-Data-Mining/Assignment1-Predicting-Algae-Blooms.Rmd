@@ -1,0 +1,317 @@
+---
+title: 'PSTAT 131/231 HW #1'
+author: "Lash Tan (231) and Jacobo Pereira-Pacheco (131)"
+date: "4/19/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ISLR)
+library(ggplot2)
+library(reshape2)
+library(knitr)
+knitr::opts_chunk$set(fig.width=7, fig.height=5)
+options(digits = 4)
+
+indent1 = '    '
+indent2 = '        '
+indent3 = '            '
+```
+_Appologies for not indenting, something in the RStudio environment has been breaking the output when doing any indenting_
+```{r intro}
+algae <- read_table2("algaeBloom.txt", col_names =
+                       c('season','size','speed','mxPH','mnO2','Cl','NO3','NH4',
+                         'oPO4','PO4','Chla','a1','a2','a3','a4','a5','a6','a7'),
+                     na="XXXXXXX")
+glimpse(algae)
+```
+
+### *Question 1* 
+##### a)
+There are 40 observations in Autumn, 53 observations in Spring, 45 observations in Summer, and 62 observations in Winter. 
+
+```{r algae-counts}
+algae %>%
+  group_by(season) %>%
+  summarize(count_total = n())
+```
+
+##### b)
+Yes, there are several missing variables in the data set. Looking at solely the mean and variance of the two quanities for different chemicals, one notices that the magnitude is very different among different chemicals. For example, looking at $NO_3$ and $NH_4$, the averages are 3.28 and 501 respectively, and same magnitudinal difference apply to their variances. This can be attributed to values for these chemicals.
+
+```{r}
+algae %>%
+  summarize(mnO2_avg = mean(mnO2, na.rm=T), Cl_avg = mean(Cl, na.rm=T),     NO3_avg = mean(NO3, na.rm=T), 
+            NH4_avg = mean(NH4, na.rm=T),   oPO4_avg = mean(oPO4, na.rm=T), PO4_avg = mean(PO4, na.rm=T),
+            Chla_avg = mean(Chla, na.rm=T),
+            mnO2_var = var(mnO2, na.rm=T),  Cl_var = var(Cl, na.rm=T),      NO3_var = var(NO3, na.rm=T),
+            NH4_var = var(NH4, na.rm=T),    oPO4_var = var(oPO4, na.rm=T),  PO4_var = var(PO4, na.rm=T),
+            Chla_var = var(Chla, na.rm=T))
+```
+
+##### c)
+It appears that for most chemicals the mean and median absolute difference (MAD) are fairly close to one another while the mean and variance can differ significantly.
+
+```{r}
+algae %>%
+  summarize(mnO2_med = median(mnO2, na.rm=T), Cl_med = median(Cl, na.rm=T),     NO3_med = median(NO3, na.rm=T), 
+            NH4_med = median(NH4, na.rm=T),   oPO4_med = median(oPO4, na.rm=T), PO4_med = median(PO4, na.rm=T),
+            Chla_med = median(Chla, na.rm=T),
+            mnO2_mad = mad(mnO2, na.rm=T),    Cl_mad = mad(Cl, na.rm=T),        NO3_mad = mad(NO3, na.rm=T), 
+            NH4_mad = mad(NH4, na.rm=T),      oPO4_mad = mad(oPO4, na.rm=T),    PO4_mad = mad(PO4, na.rm=T),
+            Chla_mad = mad(Chla, na.rm=T))
+
+algae_cts <- algae %>%
+  summarize(mnO2_avg = mean(mnO2, na.rm=T), Cl_avg = mean(Cl, na.rm=T),     NO3_avg = mean(NO3, na.rm=T), 
+            NH4_avg = mean(NH4, na.rm=T),   oPO4_avg = mean(oPO4, na.rm=T), PO4_avg = mean(PO4, na.rm=T),
+            Chla_avg = mean(Chla, na.rm=T),
+            mnO2_var = var(mnO2, na.rm=T),  Cl_var = var(Cl, na.rm=T),      NO3_var = var(NO3, na.rm=T),
+            NH4_var = var(NH4, na.rm=T),    oPO4_var = var(oPO4, na.rm=T),  PO4_var = var(PO4, na.rm=T),
+            Chla_var = var(Chla, na.rm=T),
+            mnO2_med = median(mnO2, na.rm=T), Cl_med = median(Cl, na.rm=T),     NO3_med = median(NO3, na.rm=T), 
+            NH4_med = median(NH4, na.rm=T),   oPO4_med = median(oPO4, na.rm=T), PO4_med = median(PO4, na.rm=T),
+            Chla_med = median(Chla, na.rm=T),
+            mnO2_mad = mad(mnO2, na.rm=T),    Cl_mad = mad(Cl, na.rm=T),        NO3_mad = mad(NO3, na.rm=T), 
+            NH4_mad = mad(NH4, na.rm=T),      oPO4_mad = mad(oPO4, na.rm=T),    PO4_mad = mad(PO4, na.rm=T),
+            Chla_mad = mad(Chla, na.rm=T))
+
+algae_cts %>%
+  select(starts_with("mnO2"), starts_with("Cl"), starts_with("NO3")) %>%
+  t()
+algae_cts %>%
+  select(starts_with("NH4"), starts_with("oPO4"), starts_with("PO4"), starts_with("Chla")) %>%
+  round(4) %>%
+  t()
+```
+
+### *Question 2*
+
+##### a)
+Yes, the distribution appears to be slightly negatively skewed with a good portion of the data tending to be on the right-side of the histogram. Different binwidths told different stories, but the binwidth we chose seemed to give the most accurate description of the data. 
+
+```{r}
+ggplot(algae) +
+  geom_histogram(mapping = aes(x = mxPH, y = ..density..), binwidth = .1, na.rm = T) + 
+  labs(title = "Histogram of mxPH")
+```
+
+##### b)
+
+```{r, warning=FALSE}
+ggplot(algae) +
+  geom_histogram(mapping = aes(x = mxPH, y = ..density..), binwidth = .1, na.rm = T) +
+  geom_density(mapping = aes(x = mxPH, y = ..density..), col = "blue") +
+  geom_rug(mapping = aes(x = mxPH)) +
+  labs(title = "Histogram of mxPH")
+```
+
+##### c) 
+
+```{r}
+ggplot(algae) +
+  geom_boxplot(aes(size, a1), na.rm=T) +
+  labs(title = "A conditioned Boxplot of Algal a1")
+```
+
+##### d)
+Yes, outliers are present in both $NO_3$ and $NH_4$ in the positive direction of the boxplot. We would consider $NO_3$ to have 5 outliers and $NH_4$ to have 27. The number of outliers were determined by setting thresholds using interquantile ranges to set upper and lower bounds in the data, where observations above and below these thresholds would be considered outliers.
+
+```{r, warning=FALSE}
+ggplot(algae) +
+  geom_boxplot(aes(x = "NO3", y = NO3))
+
+ggplot(algae) +
+  geom_boxplot(aes(x = "NH4", y = NH4))
+
+algae %>%
+  filter(NO3 > (quantile(NO3, .75, na.rm=T) + 1.5 * IQR(NO3, na.rm=T)) ) %>%
+  select(NO3) %>%
+  arrange(desc(NO3))
+algae %>%
+  filter(NH4 > (quantile(NH4, .75, na.rm=T) + 1.5 * IQR(NH4, na.rm=T)) ) %>%
+  select(NH4) %>%
+  arrange(desc(NH4))
+```
+
+##### e)
+It's clear that the measurements for $NH_4$ are on a much larger scale compared to the measurements of $NH_3$. However the trends for each measurements between the chemicals appear to be similar, i.e, for both chemicals the median is slightly larger than the MAD. Seeing that the variancee for $NH_4$ are exceedingly large, we would conclude that the median and MAD are more robust to outliers.
+
+```{r}
+algae_cts %>%
+  select(starts_with("NO3") , starts_with("NH4"))
+```
+
+### *Question 3*
+
+##### a)
+There are 33 observations with missing values with 1 missing value in $mxPH$, 2 missing values in $mnO_2$, 10 missing values in $Cl$, 2 missing values in $NO_3$, 2 missing values in $NH_4$, 2 missing values in $oPO_4$, 2 missing values in $PO_4$, and 12 missing values in $Chla$. 
+
+```{r}
+algae %>% is.na() %>% sum()
+algae %>% is.na()%>% colSums()
+```
+
+##### b)
+There are 184 observations in algae.del. 
+
+```{r}
+(algae.del <- algae %>%
+  filter(complete.cases(algae)))
+```
+
+##### c)
+
+```{r}
+algae.med <- algae %>%
+  mutate_at(vars(mxPH:Chla), funs(ifelse(is.na(.), median(., na.rm=T), .)))
+algae.med %>%
+  select_at(vars(mnO2:Chla)) %>%
+  slice(c(48, 62, 199))
+```
+
+##### d)
+We obtain 48.06929 for the $28^{th}$ observation
+
+```{r}
+algae %>%
+  select_at(vars(mxPH:Chla)) %>%
+  cor(use="complete.obs")
+
+algae %>% 
+  select("oPO4") %>%
+  slice(28)
+
+predict(lm(PO4~oPO4, algae), data.frame(oPO4 = 4))
+```
+##### e)
+Incorrect conclusions from only the observed data may occur if the dataset is too small. In particular, in some scenarios it is most useful to understand as to why some missing values exist. In particular, it is important to recall the example with the airplanes that were shot down, where Abraham Wald recognized that planes should be reinforced where missing data occurred and those planes were not found. This is true in a universal scenario, instead of simply thinking of techniques to fill in missing values, it may be more useful to understand why those values are missing to begin with. This is the essence of survivorship bias. 
+
+### *Question 4*
+
+##### a)
+
+```{r}
+(algae.chk <- algae.med %>%
+  mutate(chk = sample(cut(seq(1,200,1),5, label=F))))
+```
+
+##### b)
+
+```{r}
+do.chunk <- function(chunkid, chunkdef, dat){ # function argument
+  train = (chunkdef != chunkid)
+  Xtr = dat[train,1:11] # get training set
+  Ytr = dat[train,12] # get true response values in trainig set
+  Xvl = dat[!train,1:11] # get validation set
+  Yvl = dat[!train,12] # get true response values in validation set
+  lm.a1 <- lm(a1~., data = dat[train,1:12])
+  
+  predYtr = predict(lm.a1) # predict training values
+  predYvl = predict(lm.a1,Xvl) # predict validation values
+  data.frame(fold = chunkid,
+             train.error = mean((predYtr - Ytr)^2), # compute and store training error
+             val.error = mean((predYvl - Yvl)^2)) # compute and store test error
+}
+
+algae.chk %>%
+    lapply(c(1:5), do.chunk, chunkdef = .$chk, dat = .)
+```
+
+### *Question 5*
+
+##### a)
+Yes,this is expected as the "true" test error is is around the average of the estimated test error from question 4. 
+
+```{r}
+algae.Test <- read_table2('algaeTest.txt',
+                          col_names=c('season','size','speed','mxPH','mnO2','Cl','NO3',
+                                      'NH4','oPO4','PO4','Chla','a1'),
+                          na=c('XXXXXXX'))
+algae.merged <- rbind(
+  algae %>%
+    select(season:a1) %>%
+    mutate(chk = 1),
+  algae.Test %>%
+    mutate(chk = 2))
+
+algae.merged %>%
+  do.chunk(2, .$chk, .)
+```
+### *Question 6*
+
+##### a)
+The plot shows that wages at the age extremes (youngers and older) tend to earn less/have a lower ceiling, which is to be expected. The prime working years have more people earning higher salaries.
+
+```{r}
+head(Wage)
+
+ggplot(Wage, mapping = aes(x=age, y=wage)) +
+  geom_point() +
+  geom_smooth()
+```
+
+##### b)
+
+```{r, warning=FALSE}
+library(plyr)
+wage.chk <- Wage %>%
+  mutate(chk = sample(cut(1:3000,5, label=F))) %>%
+  cbind(.,data.frame(poly(Wage$age, 10, raw=F))) %>%
+  select_at(vars(X1:X10, age, wage, chk))
+
+do.chunky <- function(chunkid, chunkdef, dat, p){
+  train.dat = dat %>%
+    filter(dat$chk != chunkid)
+  train = (chunkdef != chunkid)
+  
+  if (p == 0) lm.wage <- lm(wage~1, data = train.dat)
+  else lm.wage <- lm(wage~., data = train.dat[,c(1:p,12)])
+  
+  Ytr = dat[train,12] # get true response values in training set
+  if(p == 0){
+    Xvl <- dat %>% 
+      filter(chunkdef == chunkid) %>% 
+      select(age)
+  }
+  else {
+    Xvl <- dat %>% 
+      filter(chunkdef == chunkid) %>% 
+      select(1:p)
+  }
+  
+  Yvl = dat[!train,12] # get true response values in validation set
+  predYtr = predict(lm.wage) # predict training values
+  predYvl = predict(lm.wage,Xvl) # predict validation values
+  data.frame(degree = p,
+             train.error = mean((predYtr - Ytr)^2), # compute and store training error
+             val.error = mean((predYvl - Yvl)^2)) # compute and store test error
+  
+}
+df.bind <- NULL
+i <- 0
+for (i in 0:10){
+  df.bind <- rbind(df.bind, ldply(1:5, do.chunky, chunkdef = wage.chk$chk, dat = wage.chk, p =i))
+}
+
+err.avgs <- df.bind %>%
+  group_by(degree) %>%
+  summarize_all(mean)
+```
+
+##### c)
+
+```{r, warning=FALSE}
+
+cv = 8
+melted.wage <- melt(err.avgs, id.vars='degree', value.name = 'error')
+
+ggplot(melted.wage, aes(x=degree, y=error, color=variable)) +
+  geom_line(aes(group=interaction(variable,degree))) +
+  stat_summary(aes(group=variable), fun.y="mean", geom='line', size=2) +
+  geom_vline(aes(xintercept=cv), linetype='dashed')
+
+```
+
+The training error and test error quickly decline as the degree of age increases. We expect the training error to be monotonic as the degree increases, but we notice that the training error starts increasing past the 8th degree. We may choose this as our model, but we also notice that there is very little difference between the 8th degree errors and the 4th or 5th degree, so we may want to simply choose the 4th degree for simplicity.

@@ -1,0 +1,344 @@
+---
+title: "PSTAT 131/231 HW #2"
+author: "Lash Tan (231) and Jacobo Pereira-Pacheco (131)"
+date: "4/27/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, warning = FALSE, fig.width=7, fig.height=5)
+options(digits = 4)
+```
+
+```{r Libraries}
+setwd('/home/ltan/HW/HW2')
+library(tree)
+library(randomForest)
+library(class)
+library(rpart)
+library(maptree)
+library(ROCR)
+library(reshape2)
+library(tidyverse)
+library(dplyr)
+```
+
+```{r Intro}
+spam <- read_table2("spambase.tab", guess_max=2000)
+spam <- spam %>%
+          mutate(y = factor(y, levels=c(0,1), labels=c("good", "spam"))) %>% 
+            # label as factors
+          mutate_at(.vars=vars(-y), .funs=scale) # scale others
+
+calc_error_rate <- function(predicted.value, true.value){ 
+  return(mean(true.value!=predicted.value))
+} ## calculate the misclassification rate
+
+records = matrix(NA, nrow=3, ncol=2)
+colnames(records) <- c("train.error","test.error")
+rownames(records) <- c("knn","tree","logistic")
+records ## tracking training and test error rate for classification methods
+
+set.seed(1)
+test.indices = sample(1:nrow(spam), 1000)
+  ## test.indices is a vector of row indices that represent the training set
+  ## chosen randomly
+spam.train=spam[-test.indices,] 
+  ## spam.train is a data frame containing all the columns of the 3601 obs in training set
+spam.test=spam[test.indices,]
+  ## spam.test is a data frame containing all of the columns of the 1000 obs in test set
+YTrain = spam.train$y  ## the response variable for the training set 
+XTrain = spam.train %>% select(-y) ## the design matrix for the training set
+
+YTest = spam.test$y ## the response variable for the test set
+XTest = spam.test %>% select(-y) ## the design matrix for the test set
+
+nfold = 10 
+set.seed(1)
+folds = seq.int(nrow(spam.train)) %>% ## sequential obs ids
+          cut(breaks = nfold, labels=FALSE) %>% ## sequential fold ids
+          sample ## random fold ids
+## folds is a vector of 1-10 assigning fold IDs to each observation
+## (360 each, 361 for chunk 1)
+```
+
+------
+
+## K-Nearest Neighbor Method
+
+### 1) Selecting number of neighbors
+
+```{r do.chunk}
+set.seed(1)
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, k){
+  train = (folddef!=chunkid)
+  Xtr = Xdat[train,]
+  Ytr = Ydat[train]
+  Xvl = Xdat[!train,]
+  Yvl = Ydat[!train]
+  ## get classifications for current training chunks
+  predYtr = knn(train = Xtr, test = Xtr, cl = Ytr, k = k)
+  ## get classifications for current test chunk
+  predYvl = knn(train = Xtr, test = Xvl, cl = Ytr, k = k)
+  data.frame(train.error = calc_error_rate(predYtr, Ytr),
+             val.error = calc_error_rate(predYvl, Yvl))
+}
+
+kvec = c(1, seq(10, 50, length.out=5)) ## (1, 10, 20, 30, 40, 50 for choices of neighbors)
+error.folds = NULL ## will contain list of errors for choice of neighbors
+
+```
+```{r error.folds}
+set.seed(1)
+for (j in kvec){
+  tmp = plyr::ldply(1:nfold, do.chunk, folddef = folds, 
+                    Xdat = XTrain, Ydat = YTrain, k = j)
+  tmp$neighbors = j
+  error.folds <- rbind(error.folds, tmp)
+}
+head(error.folds)
+```
+```{r KNN average error}
+(error.folds %>%
+  group_by(neighbors) %>%
+  summarize_all(funs(mean)))
+
+(best.kfold <- (error.folds %>%
+  group_by(neighbors) %>%
+  summarize_all(funs(mean)) %>%
+  filter(val.error == min(val.error)))
+  $neighbors)
+```
+
+The value of K that leads to the smallest estimated test error is 10 neighbors.
+
+### 2) Training and Test Errors
+
+```{r 10-nn}
+set.seed(1)
+pred.YTrain <- knn(XTrain, XTrain, YTrain, best.kfold)
+pred.YTest <- knn(XTrain, XTest, YTrain, best.kfold)
+calc.YTrain <- calc_error_rate(pred.YTrain, YTrain)
+calc.YTest <- calc_error_rate(pred.YTest, YTest)
+records[1] <- calc.YTrain
+records[4] <- calc.YTest
+records
+```
+
+Using the calc_error_rate() function, the 10-nearest neighbor error values in the records matrix are 0.08192169 for the training set and 0.09 for the test set.
+
+------
+
+## Decision Tree Method
+
+### 3) Controlling Decision Tree Construction
+
+```{r Tree Control}
+tc <- tree.control(nobs = nrow(spam.train), minsize = 5, mindev = 1e-5)
+spamtree <- tree(y ~ ., data = spam.train,control = tc)
+summary(spamtree)
+```
+
+There are 184 leaf nodes with 48 of the training set observations being misclassified.
+
+### 4) Decision Tree Pruning
+
+```{r 10-node Tree}
+spam.prune <- prune.tree(spamtree, best = 10, method = "misclass")
+draw.tree(spam.prune, nodeinfo = T, cex = .6)
+```
+
+The 10-node tree can be visualized as shown with 91.1% correct classification.
+
+### 5)
+
+```{r best.size.cv}
+(tree.cv <- cv.tree(spamtree, folds, FUN = prune.misclass, K = nfold))
+tree.temp <- data.frame('size'= rev(tree.cv$size), 'misclass' = rev(tree.cv$dev))
+(best.size.cv <- (tree.temp %>% filter(misclass == min(misclass)))$size[1])
+```
+```{r Size vs. Misclass}
+tree.temp %>% ggplot(., mapping = aes(x = .$size, y = .$misclass)) +
+  geom_line(col = 'dodgerblue4', lwd = 1.5) +
+  geom_point() +
+  geom_vline(xintercept = best.size.cv, col = 'red', linetype = 'dashed') +
+  labs(title = 'Tree Size vs. Misclassification Error',
+       x = 'Size', y = 'Misclassification Error') +
+  coord_cartesian(xlim = c(0,100), ylim = c(300,800)) +
+  scale_x_continuous(breaks = seq(1,184,3)) +
+  theme(axis.text.x = element_text(angle=45, size = 7))
+```
+
+The optimal tree size is 37 as shown in the plot. This produces the smallest size that gives the absolute lowest misclassification error. If we wanted to shrink the tree further, we would need to sacrifice correct classification rates to do so.
+
+### 6) Training and Test Errors
+
+```{r}
+spamtree.pruned <- prune.misclass(spamtree, best = best.size.cv)
+predict.train <- predict(spamtree.pruned, spam.train, type = 'class')
+records[2] <- calc_error_rate(predict.train, YTrain)
+
+predict.test <- predict(spamtree.pruned, spam.test, type = 'class')
+records[5] <- calc_error_rate(predict.test, YTest)
+records
+```
+
+From the calc_error_rate() function, the decision tree method produce misclassification errors of 0.05165232 for the training set and 0.072 for the test set.
+
+------
+
+### 7)
+
+##### a)
+
+Given $p(z)=\frac{e^z}{1+e^z}, \;z\in\mathbb{R}$, we have
+$$\frac{1}{p}=\frac{1+e^z}{e^z}, \;p\neq0$$
+$$\frac{1}{p}=\frac{1}{e^z}+1$$
+$$\frac{1}{p}-1=\frac{1}{e^z}$$
+$$\frac{1-p}{p}=\frac{1}{e^z}$$
+$$\frac{p}{1-p}=e^z, \;p\neq1$$
+$$ln(\frac{p}{1-p})=z(p), \;p\in(0,1)$$
+which shows that $z$ maps from $\mathbb{R} \rightarrow (0,1)$.
+
+##### b)
+
+We define:
+$$z=\beta_0+\beta_1x_1, \;p=logistic(z)$$
+$$ln(odds)=z \quad \Rightarrow \quad odds=e^z=e^{\beta_0+\beta_1x_1}$$
+which we designate our "original odds." Now,
+$$odds_{x_1+2}=e^{\beta_0+\beta_1(x_1+2)}$$
+$$=e^{\beta_0+\beta_1x_1+2\beta_1}$$
+$$=e^{2\beta_1} \times e^{\beta_0+\beta_1x_1}$$
+$$=e^{2\beta_1} \times odds$$
+Therefore, increasing $x_1$ by two gives an odds equal to $e^{2\beta_1}$ times the original odds. Now, 
+$$p=logit^{-1}(z)=\frac{e^z}{1+e^z}=\frac{e^{\beta_0+\beta_1x_1}}{1+e^{\beta_0+\beta_1x_1}}$$
+Since we assume $\beta_1$ is negative, as $x_1 \rightarrow \infty, \beta_1x_1 \rightarrow -\infty$. Therefore,
+$$\lim_{x\rightarrow\infty}{\frac{e^{-\infty}}{1+e^{-\infty}}} = \frac{0}{1} = 0$$
+Also, 
+$$\lim_{x\rightarrow-\infty}\frac{e^{\beta_0+\beta_1x_1}}{1+e^{\beta_0+\beta_1x_1}}
+=\lim_{x\rightarrow\infty}\frac{e^{\beta_0+|\beta_1x_1|}}{1+e^{\beta_0+|\beta_1x_1|}}$$
+and, by L'Hopital's rule, the probability converges to 1.
+
+### 8)
+
+```{r Logistic}
+spam.fit <- glm(y~., data = spam.train, family = "binomial")
+summary(spam.fit)
+prob.training <- round(predict(spam.fit, type="response"), 8)
+prob.outcome.train <- spam.train %>%
+                      mutate(predSPAM=as.factor(ifelse(prob.training <=.5, "good", "spam")))
+records[3] <- calc_error_rate(prob.outcome.train$predSPAM, YTrain) 
+
+prob.test <- round(predict(spam.fit, spam.test, type="response"), 8)
+prob.outcome.test <- spam.test %>%
+                      mutate(predSPAM=as.factor(ifelse(prob.test <=.5, "good", "spam")))
+records[6] <- calc_error_rate(prob.outcome.test$predSPAM, YTest)
+records
+```
+
+Viewing the full records matrix, the decision tree model has the lowest misclassification rate for this data, outperforming both KNN and logistic regression by this metric.
+
+------
+
+## Receiver Operating Characteristic curve
+### 9) ROC curve
+
+```{r Tree/GLM ROC}
+tree.prob <- predict(spamtree.pruned, spam.test, type="vector")
+tree.pred <- prediction(tree.prob[,2], spam.test$y)
+tree.perf <- performance(tree.pred, measure = "tpr", x.measure = "fpr")
+plot(tree.perf, col=2, lwd=3, main='ROC Curve')
+
+glm.pred <- prediction(prob.test, prob.outcome.test$y)
+glm.perf <- performance(glm.pred, measure = "tpr", x.measure = "fpr")
+plot(glm.perf, col=1, lwd=3, main="ROC Curve", add="T")
+legend(.6, .2, legend=c("Decision Tree", "Logistic Regression"),
+       col=c("red", "black"), lty=1, cex=1)
+```
+```{r AUCs}
+performance(tree.pred,"auc")@y.values
+performance(glm.pred,"auc")@y.values
+```
+
+The area under the curve (AUC) for our decision tree is 0.9647083 compared to 0.9758875 for logistic regression. Between these two methods, logistic regression performs better by this metric. This is interesting as we saw that the decision tree had a lower misclassification rate; however, AUC is calculated as a function of the true positive rate and the false positive rate.
+
+### 10)
+
+If we take "positive"" to mean "spam," the designer of a spam filter would be more concerned with false postive rates. For example, one would want to ensure the filter correctly classifies email as spam when appropriate because it would be more consequential if important/sensitive emails were not seen because they were incorrectly categorized as spam, whereas a few spam emails that are allowed through the filter can simply be deleted. 
+
+------
+
+### 11)
+
+As described in the problem, we classify $\hat{Y}=1$ when $\mathbb{P}(Y=1|X=x)> \tau$ for some probability threshold $\tau$ and that $f_k$ is a multivariate normal density with covariance $\Sigma_k$ and mean $\mu_k$. As $\mathbb{P}(Y=1|X=x)=\frac{f_1(x)\pi_1}{\pi_1f_1(x)+\pi_2f_2(x)}$, we have
+$$\mathbb{P}(Y=1|X=x)=\frac{f_1(x)\pi_1}{\pi_1f_1(x)+\pi_2f_2(x)} > \tau$$
+$$\frac{\frac{\pi_1}{(2\pi)^{p/2}|\Sigma_1|^{1/2}}exp[-\frac{1}{2}(x-\mu_1)'\Sigma_1^{-1}(x-\mu_1)]}
+{\Sigma_{l=1}^{2}\frac{\pi_l}{(2\pi)^{p/2}|\Sigma_l|^{1/2}}exp[-\frac{1}{2}(x-\mu_l)'\Sigma_l^{-1}(x-\mu_l)]} > \tau$$
+Taking the reciprocal:
+$$\frac{\Sigma_{l=1}^{2}\frac{\pi_l}{(2\pi)^{p/2}|\Sigma_l|^{1/2}}exp[-\frac{1}{2}(x-\mu_l)'\Sigma_l^{-1}(x-\mu_l)]}
+{\frac{\pi_1}{(2\pi)^{p/2}|\Sigma_1|^{1/2}}exp[-\frac{1}{2}(x-\mu_1)'\Sigma_1^{-1}(x-\mu_1)]} < \frac{1}{\tau}$$
+Separating the fraction:
+$$1+\frac{\frac{\pi_2}{(2\pi)^{p/2}|\Sigma_2|^{1/2}}exp[-\frac{1}{2}(x-\mu_2)'\Sigma_2^{-1}(x-\mu_2)]}
+{\frac{\pi_1}{(2\pi)^{p/2}|\Sigma_1|^{1/2}}exp[-\frac{1}{2}(x-\mu_1)'\Sigma_1^{-1}(x-\mu_1)]} < \frac{1}{\tau}$$
+$$\frac{\frac{\pi_2}{(2\pi)^{p/2}|\Sigma_2|^{1/2}}exp[-\frac{1}{2}(x-\mu_2)'\Sigma_2^{-1}(x-\mu_2)]}
+{\frac{\pi_1}{(2\pi)^{p/2}|\Sigma_1|^{1/2}}exp[-\frac{1}{2}(x-\mu_1)'\Sigma_1^{-1}(x-\mu_1)]} < \frac{1}{\tau}-1$$
+Taking the logarithm:
+$$ln(\frac{\frac{\pi_2}{(2\pi)^{p/2}|\Sigma_2|^{1/2}}exp[-\frac{1}{2}(x-\mu_2)'\Sigma_2^{-1}(x-\mu_2)]}
+{\frac{\pi_1}{(2\pi)^{p/2}|\Sigma_1|^{1/2}}exp[-\frac{1}{2}(x-\mu_1)'\Sigma_1^{-1}(x-\mu_1)]}) < ln(\frac{1-\tau}{\tau})$$
+Now, it's a matter of simplifying:
+$$ln(\frac{\pi_2}{(2\pi)^{p/2}|\Sigma_2|^{1/2}}exp[-\frac{1}{2}(x-\mu_2)'\Sigma_2^{-1}(x-\mu_2)]) -
+ln(\frac{\pi_1}{(2\pi)^{p/2}|\Sigma_1|^{1/2}}exp[-\frac{1}{2}(x-\mu_1)'\Sigma_1^{-1}(x-\mu_1)]) < ln(\frac{1-\tau}{\tau})$$
+$$ln(\pi_2)-ln(\pi_1)-ln((2\pi)^{\frac{p}{2}})+ln((2\pi)^{\frac{p}{2}}) - 
+ln(|\Sigma_2^{\frac{1}{2}}|)+ln(|\Sigma_1^{\frac{1}{2}}|) - 
+\frac{1}{2}(x-\mu_2)'\Sigma_2^{-1}(x-\mu_2) + \frac{1}{2}(x-\mu_1)'\Sigma_1^{-1}(x-\mu_1) < ln(\frac{1-\tau}{\tau})$$
+As we define $\hat{\delta}_k(x)=-\frac{1}{2}(x-\mu_k)'\Sigma_k^{-1}(x-\mu_k)-\frac{1}{2}ln|\Sigma_k|+ln(\pi_k)$, we now have:
+$$\delta_2(x)-\delta_1(x) < ln(\frac{1-\tau}{\tau})$$
+or:
+$$\delta_1(x)-\delta_2(x) > ln(\frac{\tau}{1-\tau})$$
+where $ln(\frac{\tau}{1-\tau})$ is $M(\tau)$. Note that $(x-\mu_k)'\Sigma_k^{-1}(x-\mu_k)$ satisfies a vector quadratic form, meaning our decision boundary is quadratic.
+With the decision threshold, M(1/2), we have $ln(\frac{\frac{1}{2}}{1-\frac{1}{2}})=ln(1)=0$. This is expected as a probability threshold of 1/2 for two class levels simply means we take the class level with the higher likelihood.
+
+### 12) Variable Standardization and Discretization
+
+```{r Algae}
+algae <- read_table2("algaeBloom.txt", col_names =
+                       c('season','size','speed','mxPH','mnO2','Cl','NO3','NH4',
+                         'oPO4','PO4','Chla','a1','a2','a3','a4','a5','a6','a7'),
+                     na="XXXXXXX") %>%
+          dplyr::select(-(season:mxPH),-(a2:a7)) %>%
+          mutate_at(vars(mnO2:Chla),funs(log))
+```
+```{r a1 Factorization}
+algae <- algae %>%
+          mutate_at(vars(-a1), funs(ifelse(is.na(.), median(., na.rm=T), .))) %>%
+          mutate_at(vars(a1), funs(as.factor(ifelse(a1>.5,'high','low'))))
+```
+
+The chemicals mnO2 through Chla have been log-transformed and missing values have been filled in with the respective medians. The algae count a1 has been factored into two levels: 'high' for levels above .5 and 'low' for levels between 0 to .5.
+
+### 13) Linear and Quadratic Discriminant Analysis
+
+##### a)
+
+```{r LDA}
+algae.lda <- MASS::lda(a1 ~ ., algae, CV=T)
+lda.pred <- prediction(algae.lda$posterior[,2], algae$a1)
+lda.perf <- performance(lda.pred, measure = "tpr", x.measure = "fpr")
+plot(lda.perf, col=2, lwd=3, main='ROC Curve')
+```
+
+The ROC for the LDA method can be seen as shown.
+
+```{r QDA}
+algae.qda <- MASS::qda(a1 ~ ., algae, CV=T)
+qda.pred <- prediction(algae.qda$posterior[,2], algae$a1)
+qda.perf <- performance(qda.pred, measure = "tpr", x.measure = "fpr")
+plot(lda.perf, col=2, lwd=3, main='ROC Curve')
+plot(qda.perf, col=1, lwd=3, main='ROC Curve', add=T)
+legend(.7, .4, legend=c("LDA", "QDA"),
+       col=c("red", "black"), lty=1, cex=1)
+performance(lda.pred,"auc")@y.values
+performance(qda.pred,"auc")@y.values
+```
+
+We see that the ROC for the LDA and QDA methods have slight variation, especially toward the lower values of the false positive and true positive rates. The AUC for LDA is 0.7400099 whereas the AUC for QDA is 0.757254215, giving QDA a slight edge. This is to be expected as QDA has less assumptions/restraints than LDA in that the covariances matrix for each class are not equal. We may be led to believe that the actual decision boundary between these two classes is not quite linear, and therefore LDA will have more of a bias issue. Especially using LOOCV, we can expect that the decision boundary will fit particularly well for our specific data, and as QDA will have a more flexible boundary, it should steer toward a lower bias. However, if we took the same models and introduced new data, we may want to see if perhaps QDA was too flexible and LDA may actually be the better option.

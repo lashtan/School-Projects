@@ -1,0 +1,425 @@
+---
+title: "PSTAT 131/231 HW #3"
+author: "Lash Tan (231) and Jacobo Pereira-Pacheco (131)"
+date: "06/03/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = T, warning = F, fig.width=7, fig.height=5)
+```
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(tree)
+library(randomForest)
+library(gbm)
+library(ROCR)
+library(e1071)
+library(imager)
+library(dplyr)
+options(digits = 4)
+```
+
+
+## Question 1
+### Fundamentals of the Bootstrap
+
+##### a)
+
+For a bootstrap sample $b$ of sample size $n$,
+$$\mathbb{P}\{j \notin b\} = (\frac{n-1}{n}) \times (\frac{n-1}{n}) \times ... \times (\frac{n-1}{n})$$
+$$= \prod_{k=0}^n (\frac{n-1}{n})$$
+$$=(\frac{n-1}{n})^n$$
+
+##### b)
+
+For $n$ = 1000,
+$$\mathbb{P}\{j \notin b\} = (\frac{999}{1000})^{1000} \approx 0.36769542477$$
+
+##### c)
+
+```{r resample}
+set.seed(1)
+resample <- sample(1:1000, replace = T)
+resample_unique <- length(unique(resample))
+cat("Number of missing observations from resampling (out of 1000):",
+    (1000-resample_unique))
+```
+
+##### d)
+
+```{r Shot Confidence Interval}
+set.seed(1)
+shots <- c(rep(1, 50), rep(0, 51))
+shots_bs_means <- c()
+for(i in 1:1000){
+  shots_resample <- sample(shots, length(shots), replace = T)
+  shots_avg <- mean(shots_resample)
+  shots_bs_means <- c(shots_bs_means, shots_avg)
+}
+shots_confint <- quantile(shots_bs_means, c(.025, .975))
+cat("95% confidence interval for the true 3PT%:", shots_confint)
+```
+
+Robert Covington's end-of-season 3PT% is most likely lower than what he had earlier in the season, and this is due to *regression toward the mean*. This phenomenon states that extreme values will tend to be followed by less extreme values. Essentially, Covington's 3PT% is expected to converge toward the league average as his number of shot attempts increases. As it turns out, his end-of-season average was within 1% of the league average (around 36%).
+
+## Question 2
+### Eigenfaces
+
+```{r faces_array}
+load("faces_array.RData")
+face_mat <- sapply(1:1000, function(i) as.numeric(faces_array[, , i])) %>% t
+plot_face <- function(image_vector) {
+plot(as.cimg(t(matrix(image_vector, ncol=100))), axes=FALSE, asp=1)
+}
+```
+
+##### a)
+
+```{r Average Face}
+avg_face <- colMeans(face_mat)
+plot_face(avg_face)
+```
+
+##### b)
+
+```{r face_mat PCA}
+face_pr_out <- prcomp(face_mat, center = T, scale = F)
+face_pr_var <- face_pr_out$sdev^2
+face_pve <- face_pr_var/sum(face_pr_var)
+face_cumulative_pve <- cumsum(face_pve)
+```
+
+```{r PVE Face}
+par(mfrow = c(1,2))
+
+plot(face_pve, type="l", lwd=3, xlim = c(0,20),
+     xlab = 'Principal Component', ylab = 'PVE', main = 'Proportion of Variance \nExplained (Truncated)')
+points(face_pve, pch = 15)
+plot(face_cumulative_pve, type="l", lwd=3, xlab = 'Principal Component',
+     ylab = 'Cumulative PVE', main = 'Cumulative PVE')
+```
+
+The PVE plot is truncated to the first 20 principal components to demonstrate where adding components begin to contribute minimally to the explained variance.
+
+```{r 50 var}
+pc_50 <- which(face_cumulative_pve >= .5)[1]
+plot(face_cumulative_pve, type="l", xlim = c(0,pc_50+5), lwd=3, xlab = 'Principal Component',
+     ylab = 'Cumulative PVE', main = 'Cumulative PVE')
+abline(h=.5, v=pc_50)
+abline(v = c(pc_50 - 1, pc_50 + 1), lty = 3)
+```
+
+We can see from the plot above that 5 principal components gives us just over .5 on the cumulative PVE scale, so we need 5 principal components in order to obtain at least 50% of the total variation in the face images.
+
+##### c)
+
+```{r 16 PC Faces}
+par(mfrow=c(4,4), mar=c(1,1,1,1))
+for (i in 1:16){
+  plot_face(face_pr_out$rotation[ ,i])
+}
+```
+
+We can see that there are significantly higher amounts of lighter regions opposed to darker regions, albeit both light and dark regions showcase regions of high contrast. The contrast decreases through the 16 principal components and faces become more noticeable.
+
+##### d)
+
+```{r PC1}
+min_pc1 <- head(order(face_pr_out$x[ ,1]), n = 5)
+max_pc1 <- tail(order(face_pr_out$x[ ,1]), n = 5)
+
+par(mfrow=c(2,5), mar=c(1,1,1,1))
+for(i in c(min_pc1,max_pc1))
+  plot_face(face_mat[i, ])
+```
+
+Note that the top row goes from the lowest value to the fifth lowest value from left to right while the bottom row goes from the fifth highest value to the highest value from left to right. The most obvious variation between the top row and the bottom row of the plot above is the contrast of the background with the face. The top row has completely black backgrounds while the bottom row has completely white backgrounds which greatly contrasts with the individual faces, therefore giving the most variability in the images as a whole.
+
+##### e) 
+
+```{r PC5}
+min_pc5 <- head(order((face_pr_out$x[ ,5])), n = 5)
+max_pc5 <- tail(order((face_pr_out$x[ ,5])), n = 5)
+
+par(mfrow=c(2,5), mar=c(1,1,1,1))
+for(i in c(min_pc5,max_pc5))
+  plot_face(face_mat[i, ])
+
+```
+
+Here we can see that the bottom row is marked by beautiful people while the top row is filled by people who are even more beautiful. Unfortunately, this isn't something that PCA can detect. While there can be multiple interpretations of variation between these two rows, the the feature that stands out most to us is that the bottom row has longer, dark hair that wraps around their relatively lighter faces, whereas the top row has slightly darker faces with shorter hair. An interesting addition would be that the top row has a small black border around each image, which may contribute as well. PC5 more relates to distinctions of physical characteristics of the face and therefore has more importance in *facial* recognition than PC1.
+
+##### f)
+
+```{r Carlton Face}
+par(mfrow=c(1,5), mar=c(1,1,1,1))
+k <- c(10,50,100,300)
+
+## 4 compressed face images
+for(i in k){
+  k_face <- ((face_pr_out$x[ ,1:i]) %*% (t(face_pr_out$rotation)[1:i, ]))[281, ] + avg_face
+  plot_face(k_face)
+}
+
+## original image
+plot_face(face_mat[281, ])
+```
+
+The plot above shows the four compressed images followed by the original image.
+
+## Question 3
+### Predicting insurance policy purchases
+
+##### a)
+
+```{r Caravan Train}
+library(ISLR)
+caravan_train <- Caravan[1:1000, ]
+caravan_test <- Caravan[-(1:1000), ]
+```
+
+##### b)
+
+```{r Boosting Model}
+set.seed(1)
+caravan_boost <- gbm(ifelse(Purchase == "Yes", 1, 0)~., data = caravan_train,
+                     distribution = "bernoulli", n.trees = 1000,
+                     shrinkage = .01, interaction.depth = 4)
+summary(caravan_boost)
+```
+
+The PPERSAUT, MKOOPKLA, and MOPLHOOG appear to be the most important preditors in this data set. The plot from the `summary` call does not display enough labels and is therefore not particularly useful in interpreting the most important predictors.
+
+##### c)
+
+```{r caravan_forest}
+set.seed(1)
+caravan_forest <- randomForest(Purchase ~ ., data=caravan_train, importance=TRUE)
+caravan_forest
+```
+
+The OOB estimate of error rate is 6.3% with 9 variables subsampled at each split. The default number of trees selected was 500.
+
+```{r caravan_forest Importance}
+importance(caravan_forest)
+varImpPlot(caravan_forest, n = 10)
+```
+
+The order of variable importance differed between the boosting and random forest models. Actually, even the random forest model had different order of variable importance based on the impurity value chosen - for the mean decrease in accuracy, MRELOV, MBERMIDD, and MINK7512 were the most important, whereas for the mean decrease in Gini, MOSTYPE, MGODGE, and PPERSAUT were determined to be the most important.
+
+##### d)
+
+```{r Caravan Boosting Predict}
+caravan_boost_yhat <- ifelse(predict(caravan_boost, newdata = caravan_test,
+                                     n.trees = 1000, type = "response") > .2,
+                             "Yes", "No")
+                             
+(caravan_boost_err <- table(Boost_Predict = caravan_boost_yhat, Truth = caravan_test$Purchase))
+```
+
+```{r Caravan Forest Predict}
+caravan_forest_yhat <- ifelse(predict(caravan_forest, newdata = caravan_test, type = "prob")[ ,2] > .2,
+                              "Yes", "No")
+(caravan_forest_err <- table(Forest_Predict = caravan_forest_yhat, Truth = caravan_test$Purchase))
+```
+
+```{r Caravan Forest Fraction}
+caravan_forest_err[2,2] / sum(caravan_forest_err[2, ])
+```
+
+For the random forest model, the fraction of people predicted to make a purchase that do in fact make one is $\frac{(true\;positives)}{(total\;predicted\;yes)} = \frac{44}{255}$, or 0.1508197.
+
+## Question 4
+### An SVMs prediction of drug use
+
+```{r drug_use}
+drug_use <- read_csv('drug.csv',
+                     col_names = c('ID','Age','Gender','Education','Country','Ethnicity',
+                                   'Nscore','Escore','Oscore','Ascore','Cscore','Impulsive',
+                                   'SS','Alcohol','Amphet','Amyl','Benzos','Caff','Cannabis',
+                                   'Choc','Coke','Crack','Ecstasy','Heroin','Ketamine','Legalh','LSD',
+                                   'Meth', 'Mushrooms', 'Nicotine', 'Semer','VSA'))
+drug_use <- drug_use %>%
+              mutate(recent_cannabis_use = factor(ifelse(Cannabis >= 'CL3', "Yes", "No"))) %>%
+              select(Age:SS,recent_cannabis_use)
+```
+
+##### a)
+
+```{r Drug Train}
+set.seed(1)
+drug_train_indicies <- sample(nrow(drug_use), 1500)
+drug_train <- drug_use[drug_train_indicies, ]
+drug_test <- drug_use[-drug_train_indicies, ]
+```
+
+```{r drug_svm}
+drug_svm <- svm(recent_cannabis_use~., data = drug_train, kernel = "radial", cost = 1)
+drug_svm_predict <- predict(drug_svm, newdata = drug_test)
+
+table(Prediction = drug_svm_predict, Truth = drug_test$recent_cannabis_use)
+```
+
+##### b)
+
+```{r SVM CV}
+set.seed(1)
+drug_svm_tune <- tune(svm, recent_cannabis_use~., data = drug_train, kernel = "radial",
+                      ranges=list(cost=c(0.001, 0.01, 0.1, 1, 10, 100)))
+summary(drug_svm_tune)
+```
+
+We see that `cost=0.1` results in the lowest cross-validation error rate of 0.1793333.
+
+```{r best drug cost}
+drug_best_model <- drug_svm_tune$best.model
+drug_best_predict <- predict(drug_best_model, drug_test)
+table(Prediction = drug_best_predict, Truth = drug_test$recent_cannabis_use)
+```
+
+##### c)
+
+```{r SVM Bootstrap}
+set.seed(1)
+drug_responses <- rep(0,nrow(drug_test))
+
+for(i in 1:200){
+  temp_drug <- drug_train[sample(nrow(drug_train), replace=T), ]
+  temp_svm <- svm(recent_cannabis_use~., data = temp_drug, kernel = "radial", cost = .1)
+  temp_predict <- ifelse(predict(temp_svm, newdata = drug_test) == 'Yes', 1, 0)
+  drug_responses <- drug_responses + temp_predict
+}
+
+drug_boot_probs <- drug_responses / 200
+drug_boot_yhat <- factor(ifelse(drug_boot_probs >= .5, 'Yes', 'No'))
+table(Prediction = drug_boot_yhat, Truth = drug_test$recent_cannabis_use)
+```
+
+```{r Bootstrap ROC}
+drug_boot_prediction <- prediction(drug_boot_probs, drug_test$recent_cannabis_use)
+drug_boot_perf <- performance(drug_boot_prediction, measure = "tpr", x.measure = "fpr")
+plot(drug_boot_perf, lwd=3, main="ROC Curve")
+abline(a=0, b=1, lty=3)
+```
+
+## Question 5
+### Logistic regression with polynomial features
+
+##### a)
+
+```{r read nonlinear}
+nonlinear_data <- read_csv('nonlinear.csv') %>%
+                    mutate(Y = factor(Y))
+```
+
+```{r plot nonlinear}
+ggplot(nonlinear_data, aes(x=X1, y=X2, col=Y)) +
+  geom_point()
+```
+
+##### b)
+
+```{r logistic nonlinear}
+summary(nonlinear_fit <- glm(Y ~ X1 + X2, data = nonlinear_data, family="binomial"))
+
+# grid of points over sample space
+gr <- expand.grid(X1=seq(-5, 5, by=0.1), # sample points in X1
+                  X2=seq(-5, 5, by=0.1)) # sample points in X2
+
+nonlinear_yhat <- factor(ifelse(predict(nonlinear_fit, gr, type = "response") >= .5, 1, 0))
+```
+
+```{r nonlinear Decision Boundary}
+ggplot(mapping = aes(x=X1,y=X2)) +
+  geom_point(data = gr, shape = 8, alpha = .25, aes(col = nonlinear_yhat)) +
+  geom_point(data = nonlinear_data, aes(col=Y))
+```
+
+##### c)
+
+```{r nonlinear poly}
+summary(nonlinear_poly_fit <- glm(Y ~ poly(X1, degree = 2, raw = F)
+                                  + poly(X2, degree = 2, raw = F) + X1:X2,
+                                  data = nonlinear_data, family = "binomial"))
+```
+
+```{r nonlinear poly Decision Boundary}
+nonlinear_poly_yhat <- factor(ifelse(predict(nonlinear_poly_fit, gr, type = "response") >= .5, 1, 0))
+
+ggplot(mapping = aes(x=X1, y=X2)) +
+  geom_point(data = gr, shape = 8 , alpha = .25, aes(col = nonlinear_poly_yhat)) +
+  geom_point(data = nonlinear_data, aes(col = Y))
+```
+
+Because this model is fitting a 2nd degree polynomial with interaction terms, the decision boundary accurately captures where the red points lie by forming a oval-shaped region enclosing these points. This showcases that the 2nd degree polynomial logistic regression model is able to accurately predict the decision boundary, with the exception of two misclassfied points that are either overlapping or very adjacent to the blue points.
+
+Inspecting the summary output (listed above), three of the coeffecients are significant in the interaction terms of the model; this indicates that because interactions were included in our model, the prediction was able to yield stronger predictions.
+
+##### d)
+
+```{r nonlinear 5th poly}
+summary(nonlinear_5thpoly_fit <- glm(Y ~ poly(X1, degree = 5)
+                                  + poly(X2, degree = 5),
+                                  data = nonlinear_data, family = "binomial"))
+```
+
+```{r nonlinear 5th poly Decision Boundary}
+nonlinear_5thpoly_yhat <- factor(ifelse(predict(nonlinear_5thpoly_fit, gr, type = "response") >= .5, 1, 0))
+
+ggplot(mapping = aes(x=X1, y=X2)) +
+  geom_point(data = gr, shape = 8 , alpha = .25, aes(col = nonlinear_5thpoly_yhat)) +
+  geom_point(data = nonlinear_data,aes(col = Y))
+```
+
+The lack of an interaction plot gives us some undesireable resuls. A 5th-order polynomial does a fairly reasonable job in creating decision boundaries around the true separation, but we see an added boundary in the upper left corner that is not shown in the true-labeled plot. This region does not contain any actual data points, so it is possible that the model simply did not know what to do for those points.
+
+##### e)
+
+From comparing coeffecients throughout the linear model and the two polynomial models, it is clear that the coefficients among the higher-order polynomial fits are larger in magnitude. This is related to the bias/variance trade-off - as the degree of the model increases, the model will approach a perfect fit of the data. A perfect fit of several points of data will create an extremely flexible curve that will flucuate tremendously in magnitude, represented by these coefficients. This trade-off is more clear when looking at the second-degree polynomial model where the degree is much smaller resembling lesser fluctuations, yielding smaller coeffecients. Finally, with the linear model, a first-degree polynomial is simply a line, resembling no fluctuation and therefore contains smaller coefficients.
+
+It is worth noting that the `poly()` function creates orthogonal vectors which changes the outcomes of the coefficients. It may be more accurate to either use raw values for this polynomial or to simply fit the model with explicit predictor variables, but we will obtain the same conclusion nonetheless.
+
+##### f)
+
+```{r boostrap replicates}
+set.seed(1)
+boot1 <- nonlinear_data[sample(nrow(nonlinear_data), replace = T), ]
+boot1_lm <- glm(Y ~ X1 + X2, data = boot1, family = "binomial")
+boot1_5th_fit <- glm(Y ~ poly(X1, degree = 5, raw = F)
+                                  + poly(X2, degree = 5, raw = F),
+                                  data = boot1, family = "binomial")
+set.seed(2)
+boot2 <- nonlinear_data[sample(nrow(nonlinear_data), replace = T), ]
+boot2_lm <- glm(Y ~ X1 + X2, data = boot2, family = "binomial")
+boot2_5th_fit <- glm(Y ~ poly(X1, degree = 5, raw = F)
+                                  + poly(X2, degree = 5, raw = F),
+                                  data = boot2, family = "binomial")
+set.seed(3)
+boot3 <- nonlinear_data[sample(nrow(nonlinear_data), replace = T), ]
+boot3_lm <- glm(Y ~ X1 + X2, data = boot3, family = "binomial")
+boot3_5th_fit <- glm(Y ~ poly(X1, degree = 5, raw = F)
+                                  + poly(X2, degree = 5, raw = F),
+                                  data = boot3, family = "binomial")
+```
+
+```{r Bootsrap Plots}
+plot_glm <- function(glm_fit, title){
+  temp_yhat <- factor(ifelse(predict(glm_fit, gr, type = "response") >= .5, 1, 0))
+  
+  ggplot(mapping = aes(x=X1, y=X2)) +
+    geom_point(data = gr, shape = 8 , alpha = .25, aes(col = temp_yhat)) +
+    geom_point(data = nonlinear_data, aes(col=Y)) +
+    labs(title = title)
+}
+
+plot_glm(boot1_lm, "Linear Model for Bootstrap 1")
+plot_glm(boot2_lm, "Linear Model for Bootstrap 2")
+plot_glm(boot3_lm, "Linear Model for Bootstrap 3")
+plot_glm(boot1_5th_fit, "5th Order Poly Model for Bootstrap 1")
+plot_glm(boot2_5th_fit, "5th Order Poly Model for Bootstrap 2")
+plot_glm(boot3_5th_fit, "5th Order Poly Model for Bootstrap 3")
+```
+
+As expected, the linear model has much more variation than the 5th-order polynomial model. The decision boundary for the linear model changes in slope and location fairly significantly. The 5th-order polynomial model does vary in the region where there are no true values (it cannot predict this region accurately) but the overall decision boundary will misclassify less values across different bootstrap samples.

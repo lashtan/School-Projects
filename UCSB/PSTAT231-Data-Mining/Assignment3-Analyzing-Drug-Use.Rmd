@@ -1,0 +1,282 @@
+---
+title: 'PSTAT 131/231 HW #3'
+author: "Lash Tan (231) and Jacobo Pereira-Pacheco (131)"
+date: "5/20/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, warning = FALSE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(ROCR)
+library(tree)
+library(maptree)
+library(class)
+library(lattice)
+library(dplyr)
+library(ggridges)
+library(lattice)
+```
+
+```{r csv}
+drug_use <- read_csv('drug.csv',
+col_names = c('ID','Age','Gender','Education','Country','Ethnicity',
+'Nscore','Escore','Oscore','Ascore','Cscore','Impulsive',
+'SS','Alcohol','Amphet','Amyl','Benzos','Caff','Cannabis',
+'Choc','Coke','Crack','Ecstasy','Heroin','Ketamine',
+'Legalh','LSD','Meth','Mushrooms','Nicotine','Semer','VSA'))
+```
+
+## Question 1
+###  Logistic regression for drug use prediction
+
+```{r xform}
+drug_use <- drug_use %>% mutate_at(as.ordered, .vars=vars(Alcohol:VSA))
+drug_use <- drug_use %>%
+              mutate(Gender = factor(Gender, labels=c("Male", "Female"))) %>%
+              mutate(Ethnicity = factor(Ethnicity, labels=c("Black", "Asian", "White",
+              "Mixed:White/Black", "Other",
+              "Mixed:White/Asian",
+              "Mixed:Black/Asian"))) %>%
+              mutate(Country = factor(Country, labels=c("Australia", "Canada", "New Zealand",
+              "Other", "Ireland", "UK", "USA")))
+```
+
+##### a)
+
+```{r recent_cannabis_use}
+drug_use <- drug_use %>%
+              mutate(recent_cannabis_use = factor(ifelse(Cannabis >= 'CL3', "Yes", "No")))
+```
+
+##### b)
+
+```{r subset}
+drug_use_subset <- drug_use %>% select(Age:SS, recent_cannabis_use)
+```
+
+```{r training/test}
+set.seed(1)
+train.indeces = sample(1:nrow(drug_use_subset), 1500)
+drug_use_train = drug_use_subset[train.indeces,]
+cat("Dimensions of drug_use_train:", dim(drug_use_train))
+drug_use_test = drug_use_subset[-train.indeces,]
+cat("Dimensions of drug_use_test:", dim(drug_use_test))
+```
+
+##### c)
+
+```{r logistic recent_cannabis_use}
+drug.fit.logit <- glm(recent_cannabis_use ~ ., family = "binomial", data = drug_use_train) ## default link = "logit"
+summary(drug.fit.logit)
+```
+
+##### d)
+
+```{r logit v probit}
+drug.fit.probit <- glm(recent_cannabis_use ~ ., family = binomial(link = "probit"), data = drug_use_train)
+plot(drug.fit.logit$fitted.values, drug.fit.probit$fitted.values,
+     xlab = 'Logit Fitted Values', ylab = 'Probit Fitted Values',
+     main = 'Logit vs. Probit Fitted Values', pch=19, cex=0.2)
+abline(a=0, b=1, col="red")
+```
+
+```{r logit v c-log-log}
+drug.fit.cloglog <- glm(recent_cannabis_use ~ ., family = binomial(link = "cloglog"), data = drug_use_train)
+plot(drug.fit.logit$fitted.values, drug.fit.cloglog$fitted.values, 
+     xlab = 'Logit Fitted Values', ylab = 'C-Log-Log Fitted Values',
+     main = 'Logit vs. C-Log-Log Fitted Values', pch=19, cex=0.2)
+abline(a=0, b=1, col="red")
+```
+
+Based on the two plots of fitted values, the *probit* fitted values more closely resemble the fitted values for *logit*. There only seems to be a slight overestimate for the first half quantile and a slight underestimate for the second half quantile of the *probit* fitted values in comparison with the *logit* fitted values. The *cloglog* fitted values seem to overestimate the tails and more significantly underestimate the rest of the data, also in comparison with the *logit* fitted values. Also, the *probit* and *logit* fitted values seem to very closely predict similar trends in probabilities. That is, while there are minor discrepancies between the estimates using these two link functions, there is very little variation between these differences. The *cloglog* fitted values, on the other hand, have very wide variation in comparison, especially toward the median of these values. This variation is shown by the amount of spread between points on the plots above.
+
+## Question 2
+### Decision tree models of drug use
+
+```{r decision tree}
+tree_parameters = tree.control(nobs=nrow(drug_use_train), minsize=10, mindev=1e-3)
+drug.tree <- tree(recent_cannabis_use ~ ., control = tree_parameters, data = drug_use_train)
+```
+
+##### a)
+
+```{r tree cv}
+set.seed(1)
+drug.tree.cv <- cv.tree(drug.tree, FUN = prune.misclass, K = 10)
+```
+
+```{r best tree}
+(best_size <- which.min(rev(drug.tree.cv$dev)) %>% ## reverses the list of deviances to find first minimum
+              rev(drug.tree.cv$size)[.]) ## chooses the element associated with the correct index found
+```
+
+##### b)
+
+```{r prune tree}
+drug.tree.prune <- prune.tree(drug.tree, best = best_size , method = "misclass")
+draw.tree(drug.tree.prune, nodeinfo = T, cex = .7)
+```
+
+We can see that the first split of our tree is by the `Country` variable.
+
+##### c)
+
+```{r confusion matrix}
+predict.tree <- predict(drug.tree.prune, drug_use_test, type = 'class')
+(conf.mat <- table(predict.tree, drug_use_test$recent_cannabis_use, dnn = c("Prediction", "Truth")))
+```
+
+```{r TPR and FPR}
+tpr <- conf.mat[2,2] / sum(conf.mat[,2])
+fpr <- conf.mat[2,1] / sum(conf.mat[,1])
+
+cat("The TPR of our predictions is", tpr, "and the FPR is", fpr)
+```
+
+As the *true positive rate* (TPR) is calculated by $\frac{TP}{TP+FN}$, we divide the bottom right element by the second column of our confusion matrix. Likewise, the *false positive rate* (FPR) is calculated by $\frac{FP}{FP+TN}$ which can be obtained by dividing the lower left element by the first column of our confusion matrix.
+
+## Question 3
+### Model Comparison
+
+##### a)
+
+```{r performance}
+predict.logistic <- predict(drug.fit.logit, drug_use_test, type = 'response')
+prediction.logistic <- prediction(predict.logistic, drug_use_test$recent_cannabis_use)
+perf.logistic <- performance(prediction.logistic, measure = "tpr", x.measure = "fpr")
+
+prob.tree <- predict(drug.tree.prune, drug_use_test, type="vector")
+prediction.tree <- prediction(prob.tree[,2], drug_use_test$recent_cannabis_use)
+perf.tree <- performance(prediction.tree, measure = "tpr", x.measure = "fpr")
+```
+
+
+```{r ROC}
+plot(perf.logistic, col='blue', lwd=3, main="ROC Curve")
+plot(perf.tree, col='red', lwd=3, main="ROC Curve", add="T")
+legend("bottomright", inset = .05, legend=c("Logistic Regression", "Decision Tree"),
+       col=c("blue", "red"), lty=1, cex=1)
+```
+
+```{r AUC}
+auc.logistic <- performance(prediction.logistic,"auc")@y.values[[1]]
+auc.tree <- performance(prediction.tree,"auc")@y.values[[1]]
+cat("AUC for logistic regression:", auc.logistic)
+cat("AUC for decision tree:", auc.tree)
+```
+
+So, logistic regression generally gives us the better model as it has a higher AUC value.
+
+## Question 4
+### Clustering and dimension reduction for gene expression data
+
+```{r leukemia csv}
+# rm(list=ls()) ## environment variables up to here can be reset
+leukemia_data <- read_csv("leukemia_data.csv")
+```
+
+
+##### a)
+
+```{r leukemia xform}
+leukemia_data <- leukemia_data %>% mutate(Type = factor(Type))
+
+table(leukemia_data$Type)
+```
+
+The BCR-ABL leukemia type appears the least in this dataset.
+
+##### b)
+
+```{r pca}
+leuk.pr.out <- leukemia_data %>%
+        select_at(vars(-Type)) %>%
+        prcomp(., scale = TRUE, center = TRUE)
+leuk.pr.var <- leuk.pr.out$sdev^2
+pve <- leuk.pr.var/sum(leuk.pr.var)
+cumulative_pve <- cumsum(pve)
+```
+
+```{r pve plot}
+par(mfrow = c(1,2))
+
+plot(pve, type="l", lwd=3, xlim = c(0,20),
+     xlab = 'Principal Component', ylab = 'PVE', main = 'Proportion of Variance \nExplained (Truncated)')
+points(pve, pch = 15)
+plot(cumulative_pve, type="l", lwd=3, xlab = 'Principal Component',
+     ylab = 'Cumulative PVE', main = 'Cumulative PVE')
+```
+
+We have zoomed in on the PVE plot to better visualize the optimal number of principal components to choose from. It is clear that beyond 20 principal components, adding an additional principal component negligibly adds to the PVE.  
+
+###### c)
+
+```{r biplot}
+rainbow_colors <- rainbow(7)
+plot_colors <- rainbow_colors[leukemia_data$Type]
+
+new_coords <- leuk.pr.out$x[, 1:2]
+plot(new_coords, xlim=c(-60, 60), ylim=c(-60, 40), cex=0, main = 'PC1 & PC2')
+text(-new_coords, labels=leukemia_data$Type, cex=0.3, col = plot_colors)
+abline(h=0, v=0, col="lightblue", lty=3)
+```
+
+The `T-ALL` group is the most separated by the rest of the other types along the PC1 axis. This group clearly contains the lowest values while extending all the way out toward the maximum values of PC1.
+
+```{r loadings}
+head(sort(abs(leuk.pr.out$rotation[, 1]), TRUE))
+```
+
+These 6 genes have the highest absolute loadings for PC1.
+
+##### d)
+
+```{r 1st/3rd PCs}
+new_new_coords <- leuk.pr.out$x[, c(1,3)]
+plot(new_new_coords, xlim=c(-60, 60), ylim=c(-60, 40), cex=0, main = 'PC1 & PC3')
+text(-new_new_coords, labels=leukemia_data$Type, cex=0.3, col = plot_colors)
+abline(h=0, v=0, col="lightblue", lty=3)
+```
+
+It's hard to tell if PC3 is better at discriminating between leukemia types from comparing these two graphs. There may be a bit more separation between these types for PC3, but it would also depend on which groups you want to separate.
+
+##### e)
+
+```{r density ridges}
+first.proj <- tibble(z1 = -leuk.pr.out$x[,1], Type = leukemia_data$Type)
+ggplot(data = first.proj, mapping = aes(x = z1, y = Type, fill = Type)) +
+  geom_density_ridges()
+
+third.proj <- tibble(z3 = -leuk.pr.out$x[,3], Type = leukemia_data$Type)
+ggplot(data = third.proj, mapping = aes(x = z3, y = Type, fill = Type)) +
+  geom_density_ridges()
+```
+
+It appears that the *Hyperdip50* and *BCR-ABL* leukemia types are nearly indistinguishable when the gene expression data is projected onto the first PC direction, but they are very distinguishable when projecting onto the third PC direction.
+
+##### f)
+
+```{r dendrogram}
+leukemia_subset <- leukemia_data %>% filter(Type %in% c('T-ALL','TEL-AML1','Hyperdip50'))
+leukemia_subset[,-1] <- scale(leukemia_subset[,-1], center = T, scale = T)
+leuk.dist <- dist(leukemia_subset[,-1])
+
+set.seed(1)
+leuk.hclust <- hclust(leuk.dist)
+plot(leuk.hclust, labels = leukemia_subset$Type, cex = .2)
+```
+
+```{r levelplot}
+levelplot(as.matrix(leuk.dist)[leuk.hclust$order, leuk.hclust$order], at=pretty(c(44.79, 139.5), n=10), scales = list(y=list(cex=.8), x=list(cex=.1)))
+```
+
+```{r}
+leukemia_subset %>% group_by(Type) %>% summarise(count = n())
+leuk.hclust$order
+```
+
+Based on the information above, the three blocks in the levelplot mainly represent Hyperdip50 in the bottom left, TEL-AML1 in the middle, and T-ALL in the upper right (with some overlapping). As pink represents shorter distances while blue represents larger distances, it seems reasonable to assume that TEL-AML1 and T-ALL are more similar to one another.
